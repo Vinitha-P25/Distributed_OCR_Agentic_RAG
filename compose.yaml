@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ocr-rag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ocr_rag
+      POSTGRES_USER: ocr_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ocr_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocr_user -d ocr_rag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    container_name: ocr-rag-object-storage
+    restart: unless-stopped
+    command: server -s3 -dir=/data -ip=seaweedfs
+    ports:
+      - "8333:8333"
+      - "9000:9000"
+    volumes:
+      - object_storage_data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ocr-rag-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://ocr_user:${POSTGRES_PASSWORD:-ocr_dev_password}@postgres:5432/ocr_rag
+      S3_ENDPOINT_URL: http://seaweedfs:8333
+    volumes:
+      - uploads_data:/app/uploads
+      - chroma_data:/app/database/chroma_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ocr-rag-frontend
+    restart: unless-stopped
+    command:
+      - streamlit
+      - run
+      - frontend/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+    ports:
+      - "8501:8501"
+    environment:
+      API_URL: http://api:8000
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  object_storage_data:
+  uploads_data:
+  chroma_data:
